@@ -488,6 +488,62 @@ final class APIRouterAndHandlersTests: XCTestCase {
         }
     }
 
+    @MainActor
+    private final class MockSoundService: SoundService {
+        let onPlay: (SoundEvent, Bool) -> Void
+
+        init(onPlay: @escaping (SoundEvent, Bool) -> Void = { _, _ in }) {
+            self.onPlay = onPlay
+            super.init()
+        }
+
+        override func play(_ event: SoundEvent, enabled: Bool) {
+            onPlay(event, enabled)
+        }
+    }
+
+    private final class FakeAudioDeviceTransportResolver: AudioDeviceTransportResolving {
+        private let transports: [AudioDeviceID: UInt32]
+        private let onResolve: ((AudioDeviceID) -> Void)?
+
+        init(
+            transports: [AudioDeviceID: UInt32],
+            onResolve: ((AudioDeviceID) -> Void)? = nil
+        ) {
+            self.transports = transports
+            self.onResolve = onResolve
+        }
+
+        func transportType(for deviceID: AudioDeviceID) -> UInt32? {
+            onResolve?(deviceID)
+            return transports[deviceID]
+        }
+    }
+
+    private final class FakeBluetoothInputRouteStabilizer: BluetoothInputRouteStabilizing {
+        private let handler: (AudioDeviceID?, String) -> Bool
+
+        init(handler: @escaping (AudioDeviceID?, String) -> Bool) {
+            self.handler = handler
+        }
+
+        func waitForActivatedDefaultInput(deviceID: AudioDeviceID?, reason: String) -> Bool {
+            handler(deviceID, reason)
+        }
+    }
+
+    private final class FakeAudioInputSelectionEngineValidator: AudioInputSelectionEngineValidating {
+        private let handler: (AudioDeviceID?) throws -> Void
+
+        init(handler: @escaping (AudioDeviceID?) throws -> Void) {
+            self.handler = handler
+        }
+
+        func validate(preferredDeviceID: AudioDeviceID?) throws {
+            try handler(preferredDeviceID)
+        }
+    }
+
     #if !APPSTORE
     private final class FakeMediaPlaybackController: MediaPlaybackControlling {
         var returnedSnapshot: (isPlaying: Bool, bundleIdentifier: String?) = (false, nil)
@@ -1482,6 +1538,163 @@ final class APIRouterAndHandlersTests: XCTestCase {
         XCTAssertEqual(Array(events.prefix(3)), ["capture_app", "start_audio", "pause_media"])
     }
 
+    @MainActor
+    func testApiStartRecording_playsStartSoundAfterAudioStart() async throws {
+        let appSupportDirectory = try TestSupport.makeTemporaryDirectory()
+        let originalSelectedInputDeviceUID = UserDefaults.standard.object(forKey: UserDefaultsKeys.selectedInputDeviceUID)
+        UserDefaults.standard.removeObject(forKey: UserDefaultsKeys.selectedInputDeviceUID)
+        var events: [String] = []
+        let soundService = MockSoundService { event, enabled in
+            guard event == .recordingStarted, enabled else { return }
+            events.append("start_sound")
+        }
+        var dictationContext: DictationContext?
+        defer {
+            dictationContext = nil
+            TestSupport.remove(appSupportDirectory)
+            Self.restoreSelectedInputDeviceUID(originalSelectedInputDeviceUID)
+        }
+
+        dictationContext = Self.makeDictationContext(
+            appSupportDirectory: appSupportDirectory,
+            soundService: soundService
+        )
+        let context = try XCTUnwrap(dictationContext)
+        context.dictationViewModel.soundFeedbackEnabled = true
+        context.audioRecordingService.hasMicrophonePermissionOverride = true
+        context.audioRecordingService.inputAvailabilityOverride = { _ in true }
+        context.audioRecordingService.startRecordingOverride = {
+            events.append("start_audio")
+        }
+
+        _ = context.dictationViewModel.apiStartRecording()
+
+        XCTAssertEqual(events, ["start_audio", "start_sound"])
+    }
+
+    @MainActor
+    func testApiStartRecording_skipsStartSoundForBluetoothInput() async throws {
+        let appSupportDirectory = try TestSupport.makeTemporaryDirectory()
+        let originalSelectedInputDeviceUID = UserDefaults.standard.object(forKey: UserDefaultsKeys.selectedInputDeviceUID)
+        var events: [String] = []
+        let bluetoothDeviceID = AudioDeviceID(409)
+        let soundService = MockSoundService { event, enabled in
+            guard event == .recordingStarted, enabled else { return }
+            events.append("start_sound")
+        }
+        let transportResolver = FakeAudioDeviceTransportResolver(
+            transports: [bluetoothDeviceID: kAudioDeviceTransportTypeBluetooth]
+        ) { deviceID in
+            XCTAssertEqual(deviceID, bluetoothDeviceID)
+        }
+        let deviceRouteStabilizer = FakeBluetoothInputRouteStabilizer { inputDeviceID, reason in
+            XCTAssertEqual(inputDeviceID, bluetoothDeviceID)
+            XCTAssertEqual(reason, "selection-validation")
+            return true
+        }
+        let selectionEngineValidator = FakeAudioInputSelectionEngineValidator { preferredDeviceID in
+            XCTAssertNil(preferredDeviceID)
+        }
+        let recordingRouteStabilizer = FakeBluetoothInputRouteStabilizer { inputDeviceID, reason in
+            XCTAssertEqual(inputDeviceID, bluetoothDeviceID)
+            XCTAssertEqual(reason, "recording-start")
+            return true
+        }
+        var dictationContext: DictationContext?
+        defer {
+            dictationContext = nil
+            TestSupport.remove(appSupportDirectory)
+            Self.restoreSelectedInputDeviceUID(originalSelectedInputDeviceUID)
+        }
+
+        dictationContext = Self.makeDictationContext(
+            appSupportDirectory: appSupportDirectory,
+            soundService: soundService,
+            audioDeviceTransportResolver: transportResolver,
+            audioDeviceBluetoothInputRouteStabilizer: deviceRouteStabilizer,
+            audioDeviceSelectionEngineValidator: selectionEngineValidator,
+            audioRecordingBluetoothInputRouteStabilizer: recordingRouteStabilizer
+        )
+        let context = try XCTUnwrap(dictationContext)
+        context.dictationViewModel.soundFeedbackEnabled = true
+        context.audioDeviceService.inputDevices = [
+            AudioInputDevice(deviceID: bluetoothDeviceID, name: "AirPods Max", uid: "bt-input")
+        ]
+        context.audioDeviceService.audioDeviceIDResolverOverride = { uid in
+            uid == "bt-input" ? bluetoothDeviceID : nil
+        }
+        context.audioDeviceService.selectedDeviceUID = "bt-input"
+        context.audioRecordingService.hasMicrophonePermissionOverride = true
+        context.audioRecordingService.inputAvailabilityOverride = { selectedDeviceID in
+            XCTAssertEqual(selectedDeviceID, bluetoothDeviceID)
+            return true
+        }
+        context.audioRecordingService.startRecordingOverride = {
+            XCTAssertTrue(context.audioRecordingService.selectedInputDeviceUsesBluetoothTransport)
+            events.append("start_audio")
+        }
+
+        _ = context.dictationViewModel.apiStartRecording()
+
+        XCTAssertEqual(events, ["start_audio"])
+        XCTAssertTrue(context.audioRecordingService.hasExplicitDeviceSelection)
+    }
+
+    @MainActor
+    func testApiStartRecording_keepsStartSoundForUSBInputAfterAudioStart() async throws {
+        let appSupportDirectory = try TestSupport.makeTemporaryDirectory()
+        let originalSelectedInputDeviceUID = UserDefaults.standard.object(forKey: UserDefaultsKeys.selectedInputDeviceUID)
+        var events: [String] = []
+        let usbDeviceID = AudioDeviceID(410)
+        let soundService = MockSoundService { event, enabled in
+            guard event == .recordingStarted, enabled else { return }
+            events.append("start_sound")
+        }
+        let transportResolver = FakeAudioDeviceTransportResolver(
+            transports: [usbDeviceID: kAudioDeviceTransportTypeUSB]
+        ) { deviceID in
+            XCTAssertEqual(deviceID, usbDeviceID)
+        }
+        let selectionEngineValidator = FakeAudioInputSelectionEngineValidator { preferredDeviceID in
+            XCTAssertEqual(preferredDeviceID, usbDeviceID)
+        }
+        var dictationContext: DictationContext?
+        defer {
+            dictationContext = nil
+            TestSupport.remove(appSupportDirectory)
+            Self.restoreSelectedInputDeviceUID(originalSelectedInputDeviceUID)
+        }
+
+        dictationContext = Self.makeDictationContext(
+            appSupportDirectory: appSupportDirectory,
+            soundService: soundService,
+            audioDeviceTransportResolver: transportResolver,
+            audioDeviceSelectionEngineValidator: selectionEngineValidator
+        )
+        let context = try XCTUnwrap(dictationContext)
+        context.dictationViewModel.soundFeedbackEnabled = true
+        context.audioDeviceService.inputDevices = [
+            AudioInputDevice(deviceID: usbDeviceID, name: "USB Mic", uid: "usb-input")
+        ]
+        context.audioDeviceService.audioDeviceIDResolverOverride = { uid in
+            uid == "usb-input" ? usbDeviceID : nil
+        }
+        context.audioDeviceService.selectedDeviceUID = "usb-input"
+        context.audioRecordingService.hasMicrophonePermissionOverride = true
+        context.audioRecordingService.inputAvailabilityOverride = { selectedDeviceID in
+            XCTAssertEqual(selectedDeviceID, usbDeviceID)
+            return true
+        }
+        context.audioRecordingService.startRecordingOverride = {
+            XCTAssertFalse(context.audioRecordingService.selectedInputDeviceUsesBluetoothTransport)
+            events.append("start_audio")
+        }
+
+        _ = context.dictationViewModel.apiStartRecording()
+
+        XCTAssertEqual(events, ["start_audio", "start_sound"])
+    }
+
     #if !APPSTORE
     @MainActor
     func testMediaPlaybackServicePausesAndResumesFromOneShotTrackInfo() {
@@ -1625,7 +1838,10 @@ final class APIRouterAndHandlersTests: XCTestCase {
         let dictionaryService = DictionaryService(appSupportDirectory: appSupportDirectory)
         let snippetService = SnippetService(appSupportDirectory: appSupportDirectory)
         let soundService = SoundService()
+        let originalSelectedInputDeviceUID = UserDefaults.standard.object(forKey: UserDefaultsKeys.selectedInputDeviceUID)
+        UserDefaults.standard.removeObject(forKey: UserDefaultsKeys.selectedInputDeviceUID)
         let audioDeviceService = AudioDeviceService()
+        Self.restoreSelectedInputDeviceUID(originalSelectedInputDeviceUID)
         let promptActionService = PromptActionService(appSupportDirectory: appSupportDirectory)
         let promptProcessingService = PromptProcessingService()
         let appFormatterService = AppFormatterService()
@@ -2181,7 +2397,12 @@ final class APIRouterAndHandlersTests: XCTestCase {
     private static func makeDictationContext(
         appSupportDirectory: URL,
         audioDuckingService: AudioDuckingService? = nil,
-        mediaPlaybackService: MediaPlaybackService? = nil
+        mediaPlaybackService: MediaPlaybackService? = nil,
+        soundService: SoundService? = nil,
+        audioDeviceTransportResolver: AudioDeviceTransportResolving = CoreAudioDeviceTransportResolver(),
+        audioDeviceBluetoothInputRouteStabilizer: BluetoothInputRouteStabilizing = CoreAudioBluetoothInputRouteStabilizer(),
+        audioDeviceSelectionEngineValidator: AudioInputSelectionEngineValidating = AVAudioInputSelectionEngineValidator(),
+        audioRecordingBluetoothInputRouteStabilizer: BluetoothInputRouteStabilizing = CoreAudioBluetoothInputRouteStabilizer()
     ) -> DictationContext {
         EventBus.shared = EventBus()
         PluginManager.shared = PluginManager(appSupportDirectory: appSupportDirectory)
@@ -2221,7 +2442,9 @@ final class APIRouterAndHandlersTests: XCTestCase {
         let modelManager = ModelManagerService()
         modelManager.selectProvider(mockPlugin.providerId)
 
-        let audioRecordingService = AudioRecordingService()
+        let audioRecordingService = AudioRecordingService(
+            bluetoothInputRouteStabilizer: audioRecordingBluetoothInputRouteStabilizer
+        )
         let hotkeyService = HotkeyService()
         let textInsertionService = TextInsertionService()
         let historyService = HistoryService(appSupportDirectory: appSupportDirectory)
@@ -2231,8 +2454,12 @@ final class APIRouterAndHandlersTests: XCTestCase {
         let audioDuckingService = audioDuckingService ?? AudioDuckingService()
         let dictionaryService = DictionaryService(appSupportDirectory: appSupportDirectory)
         let snippetService = SnippetService(appSupportDirectory: appSupportDirectory)
-        let soundService = SoundService()
-        let audioDeviceService = AudioDeviceService()
+        let soundService = soundService ?? SoundService()
+        let audioDeviceService = AudioDeviceService(
+            transportResolver: audioDeviceTransportResolver,
+            bluetoothInputRouteStabilizer: audioDeviceBluetoothInputRouteStabilizer,
+            selectionEngineValidator: audioDeviceSelectionEngineValidator
+        )
         let promptActionService = PromptActionService(appSupportDirectory: appSupportDirectory)
         let promptProcessingService = PromptProcessingService()
         let appFormatterService = AppFormatterService()
@@ -2309,6 +2536,14 @@ final class APIRouterAndHandlersTests: XCTestCase {
                 dictationViewModel
             ]
         )
+    }
+
+    private static func restoreSelectedInputDeviceUID(_ value: Any?) {
+        if let value {
+            UserDefaults.standard.set(value, forKey: UserDefaultsKeys.selectedInputDeviceUID)
+        } else {
+            UserDefaults.standard.removeObject(forKey: UserDefaultsKeys.selectedInputDeviceUID)
+        }
     }
 
     private static func jsonObject(_ response: HTTPResponse) throws -> [String: Any] {
