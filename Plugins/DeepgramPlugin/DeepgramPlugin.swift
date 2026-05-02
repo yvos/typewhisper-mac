@@ -364,9 +364,9 @@ final class DeepgramPlugin: NSObject, TranscriptionEnginePlugin, DictionaryTerms
         [
             "bg", "ca", "cs", "da", "de", "de-CH", "el", "en", "en-AU", "en-GB",
             "en-IN", "en-NZ", "en-US", "es", "es-419", "et", "fi", "fr", "fr-CA",
-            "hi", "hu", "id", "it", "ja", "ko", "lt", "lv", "ms", "nl", "nl-BE",
-            "no", "pl", "pt", "pt-BR", "ro", "ru", "sk", "sv", "th", "tr",
-            "uk", "vi", "zh", "zh-CN", "zh-TW",
+            "hi", "hu", "id", "it", "ja", "ko", "lt", "lv", "multi", "ms", "nl",
+            "nl-BE", "no", "pl", "pt", "pt-BR", "ro", "ru", "sk", "sv", "th",
+            "tr", "uk", "vi", "zh", "zh-CN", "zh-TW",
         ]
     }
 

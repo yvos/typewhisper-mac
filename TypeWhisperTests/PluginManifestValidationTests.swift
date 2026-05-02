@@ -627,6 +627,10 @@ final class PluginDictionaryGuardTests: XCTestCase {
         )
     }
 
+    func testDeepgramSupportedLanguagesIncludeMultilingualCodeSwitchingMode() {
+        XCTAssertTrue(DeepgramPlugin().supportedLanguages.contains("multi"))
+    }
+
     func testDeepgramDictionaryQueryItemsLimitDictionaryTermsTo100AndPreserveOrder() {
         let prompt = PluginDictionaryTerms.prompt(from: makeLongTerms(count: 150, length: 10), maxLength: 10_000)
         let queryItems = DeepgramPlugin.dictionaryQueryItems(prompt: prompt, modelId: "nova-2")
