@@ -512,6 +512,14 @@
       "requiresAPIKey": true,
       "releases": [
         {
+          "version": "1.0.10",
+          "minHostVersion": "1.4.0",
+          "sdkCompatibilityVersion": "v1",
+          "size": 182622,
+          "downloadURL": "https://github.com/TypeWhisper/typewhisper-mac/releases/download/plugin-assemblyai-v1.0.10/AssemblyAIPlugin.zip",
+          "minOSVersion": "14.0"
+        },
+        {
           "version": "1.0.9",
           "minHostVersion": "0.12.0",
           "sdkCompatibilityVersion": "v1",
