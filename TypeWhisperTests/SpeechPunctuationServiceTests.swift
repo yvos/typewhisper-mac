@@ -83,6 +83,45 @@ final class SpeechPunctuationServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectiveFallbackAvoidsDuplicatePunctuationWhenNativePunctuationIsAfterPhrase() {
+        let service = SpeechPunctuationService(rulesLoader: makeRulesLoader())
+
+        let output = service.normalize(
+            text: "come stai punto interrogativo?",
+            language: "it",
+            mode: .selectiveFallback
+        )
+
+        XCTAssertEqual(output, "come stai?")
+    }
+
+    @MainActor
+    func testSelectiveFallbackAvoidsDuplicatePunctuationWhenNativePunctuationIsBeforePhrase() {
+        let service = SpeechPunctuationService(rulesLoader: makeRulesLoader())
+
+        let output = service.normalize(
+            text: "come stai? punto interrogativo",
+            language: "it",
+            mode: .selectiveFallback
+        )
+
+        XCTAssertEqual(output, "come stai?")
+    }
+
+    @MainActor
+    func testSelectiveFallbackKeepsRepeatedExplicitPunctuationPhrases() {
+        let service = SpeechPunctuationService(rulesLoader: makeRulesLoader())
+
+        let output = service.normalize(
+            text: "punto interrogativo punto interrogativo",
+            language: "it",
+            mode: .selectiveFallback
+        )
+
+        XCTAssertEqual(output, "??")
+    }
+
+    @MainActor
     func testPipelineAppliesSpeechPunctuationBeforeDictionaryCorrections() async throws {
         let appSupportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

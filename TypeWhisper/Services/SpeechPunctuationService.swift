@@ -27,7 +27,12 @@ final class SpeechPunctuationService {
         var replacementApplied = false
 
         for rule in ruleSet.rules.sorted(by: { $0.phrase.count > $1.phrase.count }) {
-            let updated = replaceWholePhrase(rule.phrase, with: rule.replacement, in: result)
+            let updated = replaceWholePhrase(
+                rule.phrase,
+                with: rule.replacement,
+                category: rule.category,
+                in: result
+            )
             if updated != result {
                 replacementApplied = true
                 result = updated
@@ -42,7 +47,12 @@ final class SpeechPunctuationService {
         }
     }
 
-    private func replaceWholePhrase(_ phrase: String, with replacement: String, in text: String) -> String {
+    private func replaceWholePhrase(
+        _ phrase: String,
+        with replacement: String,
+        category: PunctuationRuleCategory,
+        in text: String
+    ) -> String {
         guard let regex = try? NSRegularExpression(
             pattern: wholePhrasePattern(for: phrase),
             options: [.caseInsensitive]
@@ -51,7 +61,32 @@ final class SpeechPunctuationService {
         }
 
         let range = NSRange(text.startIndex..., in: text)
-        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: replacement)
+        let matches = regex.matches(in: text, options: [], range: range)
+        guard !matches.isEmpty else {
+            return text
+        }
+
+        var result = text
+        for match in matches.reversed() {
+            guard let originalMatchRange = Range(match.range, in: text) else { continue }
+            guard let matchRange = Range(match.range, in: result) else { continue }
+            let effectiveReplacement: String
+
+            if shouldSuppressDuplicateReplacement(
+                in: text,
+                range: originalMatchRange,
+                replacement: replacement,
+                category: category
+            ) {
+                effectiveReplacement = ""
+            } else {
+                effectiveReplacement = replacement
+            }
+
+            result.replaceSubrange(matchRange, with: effectiveReplacement)
+        }
+
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func wholePhrasePattern(for phrase: String) -> String {
@@ -116,6 +151,53 @@ final class SpeechPunctuationService {
         }
 
         return result
+    }
+
+    private func shouldSuppressDuplicateReplacement(
+        in text: String,
+        range: Range<String.Index>,
+        replacement: String,
+        category: PunctuationRuleCategory
+    ) -> Bool {
+        guard category == .punctuation,
+              replacement.count == 1,
+              let replacementCharacter = replacement.first else {
+            return false
+        }
+
+        return previousNonWhitespaceCharacter(in: text, before: range.lowerBound) == replacementCharacter
+            || nextNonWhitespaceCharacter(in: text, after: range.upperBound) == replacementCharacter
+    }
+
+    private func previousNonWhitespaceCharacter(
+        in text: String,
+        before index: String.Index
+    ) -> Character? {
+        var current = index
+        while current > text.startIndex {
+            let previous = text.index(before: current)
+            let character = text[previous]
+            if !character.isWhitespace {
+                return character
+            }
+            current = previous
+        }
+        return nil
+    }
+
+    private func nextNonWhitespaceCharacter(
+        in text: String,
+        after index: String.Index
+    ) -> Character? {
+        var current = index
+        while current < text.endIndex {
+            let character = text[current]
+            if !character.isWhitespace {
+                return character
+            }
+            current = text.index(after: current)
+        }
+        return nil
     }
 
     private enum TokenBehavior {
