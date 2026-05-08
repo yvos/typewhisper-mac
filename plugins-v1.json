@@ -430,11 +430,11 @@
           "downloadCount": 2
         }
       ],
-      "version": "1.0.23",
+      "version": "1.1.0",
       "minHostVersion": "1.2.1",
       "sdkCompatibilityVersion": "v1",
-      "size": 18923332,
-      "downloadURL": "https://github.com/TypeWhisper/typewhisper-mac/releases/download/plugin-qwen3-v1.0.23/Qwen3Plugin.zip",
+      "size": 18968400,
+      "downloadURL": "https://github.com/TypeWhisper/typewhisper-mac/releases/download/plugin-qwen3-v1.1.0/Qwen3Plugin.zip",
       "minOSVersion": "14.0",
       "supportedArchitectures": [
         "arm64"
