@@ -1379,6 +1379,30 @@
           "downloadCount": 8
         }
       ]
+    },
+    {
+      "id": "com.typewhisper.xai",
+      "name": "xAI / Grok",
+      "author": "TypeWhisper",
+      "description": "Cloud LLM, speech-to-text, and text-to-speech via xAI Grok APIs. Requires an xAI API key.",
+      "descriptions": {
+        "de": "Cloud-LLM, Speech-to-Text und Text-to-Speech ueber xAI-Grok-APIs. Erfordert einen xAI API-Key."
+      },
+      "category": "transcription",
+      "downloadCount": 0,
+      "iconSystemName": "sparkles",
+      "requiresAPIKey": true,
+      "hosting": "cloud",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "minHostVersion": "1.4.0",
+          "sdkCompatibilityVersion": "v1",
+          "size": 302465,
+          "downloadURL": "https://github.com/TypeWhisper/typewhisper-mac/releases/download/plugin-xai-v1.0.0/XAIPlugin.zip",
+          "minOSVersion": "14.0"
+        }
+      ]
     }
   ]
 }
