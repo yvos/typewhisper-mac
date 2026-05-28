@@ -16,6 +16,11 @@ struct OpenAICompatibleProfile: Codable, Equatable, Identifiable, Sendable {
     var llmTemperatureModeRaw: String
     var llmTemperatureValue: Double
     var fetchedModels: [FetchedModel]
+    var chatRequestTimeoutSeconds: TimeInterval?
+
+    static let defaultChatRequestTimeout: TimeInterval = 30
+    static let minChatRequestTimeout: TimeInterval = 5
+    static let maxChatRequestTimeout: TimeInterval = 3600
 
     init(
         id: String,
@@ -25,7 +30,8 @@ struct OpenAICompatibleProfile: Codable, Equatable, Identifiable, Sendable {
         selectedLLMModelId: String = "",
         llmTemperatureModeRaw: String = PluginLLMTemperatureMode.providerDefault.rawValue,
         llmTemperatureValue: Double = 0.3,
-        fetchedModels: [FetchedModel] = []
+        fetchedModels: [FetchedModel] = [],
+        chatRequestTimeoutSeconds: TimeInterval? = nil
     ) {
         self.id = id
         self.name = name
@@ -35,9 +41,17 @@ struct OpenAICompatibleProfile: Codable, Equatable, Identifiable, Sendable {
         self.llmTemperatureModeRaw = llmTemperatureModeRaw
         self.llmTemperatureValue = llmTemperatureValue
         self.fetchedModels = fetchedModels
+        self.chatRequestTimeoutSeconds = chatRequestTimeoutSeconds
     }
 
     var isDefault: Bool { id == Self.defaultId }
+
+    var resolvedChatRequestTimeout: TimeInterval {
+        guard let seconds = chatRequestTimeoutSeconds, seconds.isFinite else {
+            return Self.defaultChatRequestTimeout
+        }
+        return min(max(seconds, Self.minChatRequestTimeout), Self.maxChatRequestTimeout)
+    }
 
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -50,7 +64,8 @@ struct OpenAICompatibleProfile: Codable, Equatable, Identifiable, Sendable {
         selectedLLMModelId: String = "",
         llmTemperatureModeRaw: String = PluginLLMTemperatureMode.providerDefault.rawValue,
         llmTemperatureValue: Double = 0.3,
-        fetchedModels: [FetchedModel] = []
+        fetchedModels: [FetchedModel] = [],
+        chatRequestTimeoutSeconds: TimeInterval? = nil
     ) -> OpenAICompatibleProfile {
         OpenAICompatibleProfile(
             id: defaultId,
@@ -60,7 +75,8 @@ struct OpenAICompatibleProfile: Codable, Equatable, Identifiable, Sendable {
             selectedLLMModelId: selectedLLMModelId,
             llmTemperatureModeRaw: llmTemperatureModeRaw,
             llmTemperatureValue: llmTemperatureValue,
-            fetchedModels: fetchedModels
+            fetchedModels: fetchedModels,
+            chatRequestTimeoutSeconds: chatRequestTimeoutSeconds
         )
     }
 }
@@ -349,6 +365,17 @@ final class OpenAICompatiblePlugin: NSObject,
         }
     }
 
+    func setChatRequestTimeout(_ seconds: Double, for profileId: String) {
+        guard seconds.isFinite else { return }
+        let clamped = min(
+            max(seconds.rounded(), OpenAICompatibleProfile.minChatRequestTimeout),
+            OpenAICompatibleProfile.maxChatRequestTimeout
+        )
+        updateProfile(profileId) { profile in
+            profile.chatRequestTimeoutSeconds = clamped
+        }
+    }
+
     // MARK: - Profile Runtime
 
     func displayName(for profileId: String) -> String {
@@ -442,7 +469,8 @@ final class OpenAICompatiblePlugin: NSObject,
             model: modelId,
             systemPrompt: systemPrompt,
             userText: userText,
-            temperature: providerTemperatureDirective(for: profileId).resolvedTemperature(applying: temperatureDirective)
+            temperature: providerTemperatureDirective(for: profileId).resolvedTemperature(applying: temperatureDirective),
+            requestTimeout: profile.resolvedChatRequestTimeout
         )
     }
 
@@ -806,6 +834,7 @@ private struct OpenAICompatibleSettingsView: View {
     @State private var manualLLMModel = ""
     @State private var llmTemperatureMode: PluginLLMTemperatureMode = .providerDefault
     @State private var llmTemperatureValue: Double = 0.3
+    @State private var chatTimeoutInput = ""
 
     private let bundle = pluginModuleBundle
 
@@ -907,6 +936,7 @@ private struct OpenAICompatibleSettingsView: View {
                     serverSection
                     modelSection
                     temperatureSection
+                    timeoutSection
 
                     Text("API keys are stored securely in the Keychain", bundle: bundle)
                         .font(.caption)
@@ -1171,6 +1201,31 @@ private struct OpenAICompatibleSettingsView: View {
         }
     }
 
+    private var timeoutSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+
+            Text("LLM Request Timeout", bundle: bundle)
+                .font(.headline)
+
+            HStack(spacing: 8) {
+                TextField(String(localized: "Seconds", bundle: bundle), text: $chatTimeoutInput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 100)
+                    .onSubmit(saveChatTimeout)
+                    .accessibilityLabel(Text("LLM Request Timeout", bundle: bundle))
+
+                Button(String(localized: "Save", bundle: bundle), action: saveChatTimeout)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+
+            Text("Seconds to wait for the LLM response. Increase for local servers (LM Studio, Ollama) that take a long time on large prompts. Higher values wait longer before failing. Default 30.", bundle: bundle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func reloadProfiles(selecting profileId: String? = nil, preserveInputs: Bool = false) {
         profiles = plugin.profileSnapshots
         if let profileId,
@@ -1197,7 +1252,22 @@ private struct OpenAICompatibleSettingsView: View {
         manualLLMModel = profile.selectedLLMModelId
         llmTemperatureMode = PluginLLMTemperatureMode(rawValue: profile.llmTemperatureModeRaw) ?? .providerDefault
         llmTemperatureValue = profile.llmTemperatureValue
+        chatTimeoutInput = String(Int(profile.resolvedChatRequestTimeout))
         connectionResult = nil
+    }
+
+    private func saveChatTimeout() {
+        guard let selectedProfile else { return }
+        let trimmed = chatTimeoutInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let seconds = Double(trimmed) else {
+            chatTimeoutInput = String(Int(selectedProfile.resolvedChatRequestTimeout))
+            return
+        }
+        plugin.setChatRequestTimeout(seconds, for: selectedProfile.id)
+        reloadProfiles(selecting: selectedProfile.id, preserveInputs: true)
+        if let updated = plugin.profileSnapshot(for: selectedProfile.id) {
+            chatTimeoutInput = String(Int(updated.resolvedChatRequestTimeout))
+        }
     }
 
     private func saveProfileName() {
